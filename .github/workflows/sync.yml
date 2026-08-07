@@ -3,7 +3,7 @@ name: Auto Sync Fork
 on:
   schedule:
     # 每天 UTC 时间 00:00 自动执行（北京时间早上 8:00）
-    - cron: '0 0 * * *'
+    - cron: '15 0 * * *'
   # 允许在 Actions 面板手动点击执行
   workflow_dispatch: 
 
