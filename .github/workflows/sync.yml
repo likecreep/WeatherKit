@@ -22,7 +22,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Keep workflow alive
-        if: github.event_name == 'schedule'
         shell: bash
         run: |
           workflow="${GITHUB_WORKFLOW_REF%%@*}"
