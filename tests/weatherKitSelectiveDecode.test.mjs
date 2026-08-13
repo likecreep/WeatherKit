@@ -16,6 +16,20 @@ const [{ default: WeatherKit2 }, { FlatBufferRootProcessor }, { News, Weather },
 ]);
 
 const supportedRootDataSets = Object.getOwnPropertyNames(Weather.prototype).filter(dataSet => !["constructor", "__init"].includes(dataSet));
+const qWeatherAlertHtml = `<!doctype html>
+<html>
+    <head><title>建邺天气预警</title></head>
+    <body>
+        <h1 class="c-submenu__location">建邺</h1>
+        <div class="c-city-warning-events warning--orange">
+            <h3>建邺区气象台发布高温橙色预警信号。</h3>
+            <p>发布日期：2026-08-02T17:48:00+08:00</p>
+            <p class="warning-events__txt">预计明天最高气温可达37℃以上。</p>
+            <div class="warning-defense__txt"><p>1. 做好防暑降温。</p><p>2. 避免高温时段户外活动。</p></div>
+        </div>
+        <div class="c-city-warning-around"></div>
+    </body>
+</html>`;
 const qWeatherAlertAPI = {
     metadata: {
         attributions: ["国家预警信息发布中心", "当前预警数据可能存在延迟或信息过时，以官方数据发布为准。"],
@@ -56,6 +70,32 @@ const qWeatherAlertAPI = {
     ],
 };
 const qWeatherHighTemperatureAlert = qWeatherAlertAPI.alerts[1];
+const colorfulCloudsAlertAPI = {
+    alerts: [
+        {
+            id: "urn:oid:2.49.0.1.840.0.weatherkit-test",
+            region_code: "CN",
+            source: 1,
+            msg_type: 1,
+            event_name: "高温",
+            categories: [2],
+            urgency: 1,
+            severity: 2,
+            certainty: 2,
+            sent_time: 1785664080,
+            effective_time: 1785664080,
+            onset_time: 1785664080,
+            expires_time: 1785750480,
+            references: [],
+            areas: [{ area_desc: "南京市", geocodes: [{ value_name: "CODE", value: "320100", namespace: "CN" }], polygons: [], circles: [] }],
+            language_code: "zh-CN",
+            sender_name: "南京市气象台",
+            headline: "南京市气象台发布高温橙色预警",
+            description: "预计明天最高气温可达37℃以上。",
+            instruction: "1.做好防暑降温。",
+        },
+    ],
+};
 
 test("WeatherKit2 is a configured reusable root processor", () => {
     assert.ok(WeatherKit2 instanceof FlatBufferRootProcessor);
@@ -206,37 +246,44 @@ test("response rewrites an injection root when its dataSet was requested", async
     assert.deepEqual(Object.keys(WeatherKit2.decode(new ByteBuffer(responseBytes), ["forecastNextHour", "news"])), ["forecastNextHour", "news"]);
 });
 
-test("response rewrites only National Warning Center weatherAlerts collection details URL", async () => {
-    const expectedDetailsUrl = "https://weatherkit.apple.com/alertDetails/index.html?ids=32.115,118.814&lang=zh-CN&party=QWeather";
+test("response preserves the user-supplied QWeather Alert API path", async () => {
     const expectedAttributionUrl = "https://developer.qweather.com/attribution.html";
     const expectedOnsetTime = Math.trunc(new Date(qWeatherHighTemperatureAlert.onsetTime).getTime() / 1000);
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async input => {
-        const requestUrl = typeof input === "string" ? input : input?.url ?? input;
-        if (String(requestUrl).includes("/weatheralert/v1/current/")) {
-            return new globalThis.Response(JSON.stringify(qWeatherAlertAPI), { headers: { "Content-Type": "application/json" } });
-        }
-        throw new Error(`unexpected fetch: ${requestUrl}`);
+    const originalArgument = globalThis.$argument;
+    const originalHttpClient = globalThis.$httpClient;
+    let sourceRequest;
+    globalThis.$argument = {
+        API: { QWeather: { Host: "devapi.qweather.com", Token: "user-token" } },
+        LogLevel: "OFF",
+        Storage: "Argument",
+        WeatherAlerts: { Provider: "QWeather" },
+    };
+    globalThis.$httpClient = {
+        get(resource, callback) {
+            sourceRequest = resource;
+            callback(undefined, { headers: { "Content-Type": "application/json" }, status: 200 }, JSON.stringify(qWeatherAlertAPI));
+        },
     };
 
     try {
         for (const providerName of ["国家预警信息发布中心", "國家預警信息發布中心", "National Early Warning Center"]) {
             const originalBytes = createWeatherAlertRoot(providerName);
             const originalDecoded = WeatherKit2.decode(new ByteBuffer(originalBytes), ["weatherAlerts"]);
+            const expectedDetailsUrl = "https://weatherkit.apple.com/alertDetails/index.html?ids=31.23,121.47&lang=zh-CN&party=QWeather";
             const expectedEndTime = originalDecoded.weatherAlerts.alerts[0].expireTime;
             for (const handler of [Response, ResponseDev]) {
-                const response = await handler(
-                    {
-                        headers: {},
-                        url: "https://weatherkit.apple.com/api/v2/weather/zh-Hans-CN/31.23/121.47?timezone=Asia%2FShanghai&country=CN&dataSets=weatherAlerts",
-                    },
-                    {
-                        bodyBytes: originalBytes,
-                        headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
-                    },
-                );
+                const request = {
+                    headers: {},
+                    url: "https://weatherkit.apple.com/api/v2/weather/zh-Hans-CN/31.23/121.47?timezone=Asia%2FShanghai&country=CN&dataSets=weatherAlerts",
+                };
+                const response = await runResponseHandler(handler, request, {
+                    bodyBytes: originalBytes,
+                    headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
+                });
                 const decoded = WeatherKit2.decode(new ByteBuffer(new Uint8Array(response.body)), ["weatherAlerts"]);
 
+                assert.equal(sourceRequest.url, "https://devapi.qweather.com/weatheralert/v1/current/31.23/121.47?lang=zh-hans", providerName);
+                assert.equal(sourceRequest.headers["X-QW-Api-Key"], "user-token", providerName);
                 assert.equal(decoded.weatherAlerts.detailsUrl, expectedDetailsUrl, providerName);
                 assert.equal(decoded.weatherAlerts.metadata.attributionUrl, expectedAttributionUrl, providerName);
                 assert.equal(decoded.weatherAlerts.metadata.readTime, originalDecoded.weatherAlerts.metadata.readTime, providerName);
@@ -259,25 +306,171 @@ test("response rewrites only National Warning Center weatherAlerts collection de
             }
         }
     } finally {
-        globalThis.fetch = originalFetch;
+        globalThis.$argument = originalArgument;
+        globalThis.$httpClient = originalHttpClient;
     }
 });
 
-test("response does not rewrite weatherAlerts details URL for other providers", async () => {
-    const originalBytes = createWeatherAlertRoot("The Weather Channel");
+test("response selects the ColorfulClouds WeatherAlert API explicitly", async () => {
+    const originalArgument = globalThis.$argument;
+    const originalHttpClient = globalThis.$httpClient;
+    let sourceUrl;
+    globalThis.$argument = {
+        API: { ColorfulClouds: { Token: "colorful-token" }, QWeather: { Host: "devapi.qweather.com", Token: "qweather-token" } },
+        LogLevel: "OFF",
+        Storage: "Argument",
+        WeatherAlerts: { Provider: "ColorfulClouds" },
+    };
+    globalThis.$httpClient = {
+        get(resource, callback) {
+            sourceUrl = new URL(resource.url);
+            callback(undefined, { headers: { "Content-Type": "application/json" }, status: 200 }, JSON.stringify(colorfulCloudsAlertAPI));
+        },
+    };
+
+    try {
+        for (const handler of [Response, ResponseDev]) {
+            const originalBytes = createWeatherAlertRoot("国家预警信息发布中心");
+            const response = await runResponseHandler(
+                handler,
+                {
+                    headers: {},
+                    url: "https://weatherkit.apple.com/api/v2/weather/zh-Hans-CN/31.23/121.47?timezone=Asia%2FShanghai&country=CN&dataSets=weatherAlerts",
+                },
+                {
+                    bodyBytes: originalBytes,
+                    headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
+                },
+            );
+            const decoded = WeatherKit2.decode(new ByteBuffer(new Uint8Array(response.body)), ["weatherAlerts"]);
+
+            assert.equal(sourceUrl.toString(), "https://singer.caiyunhub.com/v3/cap_alert/location?token=colorful-token&longitude=121.47&latitude=31.23&language=zh_CN");
+            assert.equal(decoded.weatherAlerts.metadata.attributionUrl, "https://www.caiyunapp.com/h5");
+            assert.equal(decoded.weatherAlerts.detailsUrl, "https://weatherkit.apple.com/alertDetails/index.html?ids=31.23,121.47&lang=zh-CN&party=ColorfulClouds");
+            assert.equal(decoded.weatherAlerts.alerts[0].description, "高温橙色预警");
+        }
+    } finally {
+        globalThis.$argument = originalArgument;
+        globalThis.$httpClient = originalHttpClient;
+    }
+});
+
+test("response derives QWeather HTML alerts and the internal details URL from the FlatBuffer severe-weather URL", async () => {
+    const expectedDetailsUrl = "https://weatherkit.apple.com/alertDetails/index.html?ids=jian'an-101180407&lang=zh-CN&party=qweather";
+    const expectedAttributionUrl = "https://www.qweather.com/severe-weather/jian'an-101180407.html?from=AppleWeatherService";
+    const expectedOnsetTime = Math.trunc(new Date("2026-08-02T17:48:00+08:00").getTime() / 1000);
+    const originalArgument = globalThis.$argument;
+    const originalHttpClient = globalThis.$httpClient;
+    let sourceUrl;
+    globalThis.$argument = {
+        API: { ColorfulClouds: { Token: "colorful-token" }, QWeather: { Host: "devapi.qweather.com", Token: "qweather-token" } },
+        LogLevel: "OFF",
+        Storage: "Argument",
+        WeatherAlerts: { Provider: "QWeatherWeb" },
+    };
+    globalThis.$httpClient = {
+        get(resource, callback) {
+            sourceUrl = new URL(resource.url);
+            callback(undefined, { headers: { "Content-Type": "text/html; charset=utf-8" }, status: 200 }, qWeatherAlertHtml);
+        },
+    };
+
+    try {
+        for (const providerName of ["国家预警信息发布中心", "國家預警信息發布中心", "National Early Warning Center"]) {
+            const originalBytes = createWeatherAlertRoot(providerName);
+            const originalDecoded = WeatherKit2.decode(new ByteBuffer(originalBytes), ["weatherAlerts"]);
+            const expectedEndTime = originalDecoded.weatherAlerts.alerts[0].expireTime;
+            for (const handler of [Response, ResponseDev]) {
+                const request = {
+                    headers: {},
+                    url: "https://weatherkit.apple.com/api/v2/weather/zh-Hans-CN/31.23/121.47?timezone=Asia%2FShanghai&country=CN&dataSets=weatherAlerts",
+                };
+                const response = await runResponseHandler(handler, request, {
+                    bodyBytes: originalBytes,
+                    headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
+                });
+                const decoded = WeatherKit2.decode(new ByteBuffer(new Uint8Array(response.body)), ["weatherAlerts"]);
+
+                assert.equal(sourceUrl.toString(), "https://www.qweather.com/severe-weather/jian'an-101180407.html?from=AppleWeatherService", providerName);
+                assert.equal(decoded.weatherAlerts.detailsUrl, expectedDetailsUrl, providerName);
+                assert.equal(decoded.weatherAlerts.metadata.attributionUrl, expectedAttributionUrl, providerName);
+                assert.equal(decoded.weatherAlerts.metadata.readTime, originalDecoded.weatherAlerts.metadata.readTime, providerName);
+                assert.equal(decoded.weatherAlerts.metadata.reportedTime, originalDecoded.weatherAlerts.metadata.reportedTime, providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].detailsUrl, originalDecoded.weatherAlerts.alerts[0].detailsUrl, providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].attributionUrl, originalDecoded.weatherAlerts.alerts[0].attributionUrl, providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].areaId, "101180407", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].areaName, "建邺", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].description, "高温橙色预警", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].eventOnsetTime, expectedOnsetTime, providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].eventEndTime, expectedEndTime, providerName);
+                assert.deepEqual(decoded.weatherAlerts.alerts[0].responses, ["AVOID"], providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].certainty, "UNKNOWN", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].importance, "HIGH", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].severity, "SEVERE", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].significance, "UNKNOWN", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].urgency, "UNKNOWN", providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].source, originalDecoded.weatherAlerts.alerts[0].source, providerName);
+                assert.equal(decoded.weatherAlerts.alerts[0].issuedTime, originalDecoded.weatherAlerts.alerts[0].issuedTime, providerName);
+            }
+        }
+    } finally {
+        globalThis.$argument = originalArgument;
+        globalThis.$httpClient = originalHttpClient;
+    }
+});
+
+test("response preserves the original WeatherAlert slot when WeatherKit is selected", async () => {
+    const originalArgument = globalThis.$argument;
+    const originalHttpClient = globalThis.$httpClient;
+    globalThis.$argument = {
+        LogLevel: "OFF",
+        Storage: "Argument",
+        WeatherAlerts: { Provider: "WeatherKit" },
+    };
+    globalThis.$httpClient = {
+        get() {
+            assert.fail("WeatherKit must not fetch a replacement WeatherAlert source");
+        },
+    };
+
+    try {
+        const originalBytes = createWeatherAlertRoot();
+        const originalDecoded = WeatherKit2.decode(new ByteBuffer(originalBytes), ["weatherAlerts"]);
+        for (const handler of [Response, ResponseDev]) {
+            const response = await runResponseHandler(
+                handler,
+                {
+                    headers: {},
+                    url: "https://weatherkit.apple.com/api/v2/weather/zh-Hans-CN/31.23/121.47?timezone=Asia%2FShanghai&country=CN&dataSets=weatherAlerts",
+                },
+                {
+                    bodyBytes: originalBytes,
+                    headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
+                },
+            );
+            const decoded = WeatherKit2.decode(new ByteBuffer(new Uint8Array(response.body)), ["weatherAlerts"]);
+
+            assert.deepEqual(decoded.weatherAlerts, originalDecoded.weatherAlerts);
+        }
+    } finally {
+        globalThis.$argument = originalArgument;
+        globalThis.$httpClient = originalHttpClient;
+    }
+});
+
+test("response does not rewrite weatherAlerts without a supported QWeather severe-weather URL", async () => {
+    const originalBytes = createWeatherAlertRoot("The Weather Channel", "https://weather.com/alerts/example");
     const originalDecoded = WeatherKit2.decode(new ByteBuffer(originalBytes), ["weatherAlerts"]);
 
     for (const handler of [Response, ResponseDev]) {
-        const response = await handler(
-            {
-                headers: {},
-                url: "https://weatherkit.apple.com/api/v2/weather/en-US/32.115/118.814?timezone=Asia%2FShanghai&country=US&dataSets=weatherAlerts",
-            },
-            {
-                bodyBytes: originalBytes,
-                headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
-            },
-        );
+        const request = {
+            headers: {},
+            url: "https://weatherkit.apple.com/api/v2/weather/en-US/32.115/118.814?timezone=Asia%2FShanghai&country=US&dataSets=weatherAlerts",
+        };
+        const response = await runResponseHandler(handler, request, {
+            bodyBytes: originalBytes,
+            headers: { "Content-Type": "application/vnd.apple.flatbuffer" },
+        });
         const decoded = WeatherKit2.decode(new ByteBuffer(new Uint8Array(response.body)), ["weatherAlerts"]);
 
         assert.equal(decoded.weatherAlerts.detailsUrl, originalDecoded.weatherAlerts.detailsUrl);
@@ -287,7 +480,7 @@ test("response does not rewrite weatherAlerts details URL for other providers", 
     }
 });
 
-test("development response patches a dynamically decoded non-injection root when its dataSet was requested", async () => {
+test("development response preserves a dynamically decoded non-injection root when its dataSet was requested", async () => {
     const originalBytes = WeatherKit2.encode(undefined, {
         news: {
             metadata: {
@@ -296,6 +489,7 @@ test("development response patches a dynamically decoded non-injection root when
             placements: [],
         },
     });
+    const originalDecoded = WeatherKit2.decode(new ByteBuffer(originalBytes), ["news"]);
     const request = {
         headers: {},
         url: "https://weatherkit.apple.com/api/v2/weather/en-US/22.5431/114.0579?country=US&dataSets=news",
@@ -313,7 +507,7 @@ test("development response patches a dynamically decoded non-injection root when
     }
     const decoded = WeatherKit2.decode(new ByteBuffer(new Uint8Array(response.body)), ["news"]);
 
-    assert.equal(decoded.news.metadata.providerLogo, "https://weatherkit.apple.com/assets/v2/TWC.png");
+    assert.deepEqual(decoded.news, originalDecoded.news);
 });
 
 function createWeatherRoot(presentSlots) {
@@ -326,8 +520,7 @@ function createWeatherRoot(presentSlots) {
     return builder.asUint8Array().slice();
 }
 
-function createWeatherAlertRoot(providerName = "国家预警信息发布中心") {
-    const qWeatherUrl = "https://www.qweather.com/severe-weather/qixia-101190112.html?from=AppleWeatherService";
+function createWeatherAlertRoot(providerName = "国家预警信息发布中心", qWeatherUrl = "https://www.qweather.com/severe-weather/jian'an-101180407.html?from=AppleWeatherService") {
     return WeatherKit2.encode(undefined, {
         weatherAlerts: {
             metadata: {
@@ -380,6 +573,16 @@ function createWeatherAlertRoot(providerName = "国家预警信息发布中心")
 function createEmptyTable(builder) {
     builder.startObject(0);
     return builder.endObject();
+}
+
+async function runResponseHandler(handler, request, response) {
+    const previousRequest = globalThis.$request;
+    globalThis.$request = request;
+    try {
+        return await handler(request, response);
+    } finally {
+        globalThis.$request = previousRequest;
+    }
 }
 
 function captureConsole(run) {

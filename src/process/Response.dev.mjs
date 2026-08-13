@@ -104,13 +104,14 @@ export async function Response($request, $response) {
                             if (url.pathname.startsWith("/api/v2/weather/")) {
                                 const parameters = parseWeatherKitURL(url);
                                 body = WeatherKit2.decode(ByteBuffer, parameters.dataSets);
+                                const providerParameters = { ...parameters, weatherKitLanguage: body.weatherAlerts?.metadata?.language };
                                 const matchEnum = new MatchEnum(body);
                                 if (Settings?.LogLevel === "DEBUG" || Settings?.LogLevel === "ALL") {
                                     await matchEnum.init();
                                 }
                                 const enviroments = {
-                                    colorfulClouds: new ColorfulClouds(parameters, Settings?.API?.ColorfulClouds?.Token || "Y2FpeXVuX25vdGlmeQ=="),
-                                    qWeather: new QWeather(parameters, Settings?.API?.QWeather?.Token || "bdd98ec1d87747f3a2e8b1741a5af796", Settings?.API?.QWeather?.Host),
+                                    colorfulClouds: new ColorfulClouds(providerParameters, Settings?.API?.ColorfulClouds?.Token || "Y2FpeXVuX25vdGlmeQ=="),
+                                    qWeather: new QWeather(providerParameters, Settings?.API?.QWeather?.Token || "bdd98ec1d87747f3a2e8b1741a5af796", Settings?.API?.QWeather?.Host),
                                     waqi: new WAQI(parameters, Settings?.API?.WAQI?.Token),
                                     country: parameters.country,
                                 };
@@ -131,17 +132,14 @@ export async function Response($request, $response) {
                                                     matchEnum.pressureTrend();
                                                 }
                                                 body.currentWeather = await InjectCurrentWeather(body.currentWeather, Settings, enviroments);
-                                                if (body?.currentWeather?.metadata?.providerName && !body?.currentWeather?.metadata?.providerLogo) body.currentWeather.metadata.providerLogo = providerNameToLogo(body?.currentWeather?.metadata?.providerName, "v2");
                                                 break;
                                             }
                                             case "forecastDaily": {
                                                 body.forecastDaily = await InjectForecastDaily(body.forecastDaily, Settings, enviroments);
-                                                if (body?.forecastDaily?.metadata?.providerName && !body?.forecastDaily?.metadata?.providerLogo) body.forecastDaily.metadata.providerLogo = providerNameToLogo(body?.forecastDaily?.metadata?.providerName, "v2");
                                                 break;
                                             }
                                             case "forecastHourly": {
                                                 body.forecastHourly = await InjectForecastHourly(body.forecastHourly, Settings, enviroments);
-                                                if (body?.forecastHourly?.metadata?.providerName && !body?.forecastHourly?.metadata?.providerLogo) body.forecastHourly.metadata.providerLogo = providerNameToLogo(body?.forecastHourly?.metadata?.providerName, "v2");
                                                 break;
                                             }
                                             case "forecastNextHour": {
@@ -151,14 +149,12 @@ export async function Response($request, $response) {
                                                     matchEnum.forecastToken();
                                                 }
                                                 body.forecastNextHour = await InjectForecastNextHour(body.forecastNextHour, Settings, enviroments);
-                                                if (body?.forecastNextHour?.metadata?.providerName && !body?.forecastNextHour?.metadata?.providerLogo) body.forecastNextHour.metadata.providerLogo = providerNameToLogo(body?.forecastNextHour?.metadata?.providerName, "v2");
                                                 break;
                                             }
                                             case "news": {
                                                 if (Settings?.LogLevel === "DEBUG" || Settings?.LogLevel === "ALL") {
                                                     matchEnum.placementType();
                                                 }
-                                                if (body?.news?.metadata?.providerName && !body?.news?.metadata?.providerLogo) body.news.metadata.providerLogo = providerNameToLogo(body?.news?.metadata?.providerName, "v2");
                                                 Console.debug(`body.news: ${JSON.stringify(body?.news, null, 2)}`);
                                                 break;
                                             }
@@ -171,21 +167,11 @@ export async function Response($request, $response) {
                                                     matchEnum.importanceType();
                                                     matchEnum.responseType();
                                                 }
-                                                body.weatherAlerts = await InjectWeatherAlerts(body.weatherAlerts, Settings, enviroments, parameters, url);
-                                                if (body?.weatherAlerts?.metadata?.providerName && !body?.weatherAlerts?.metadata?.providerLogo) body.weatherAlerts.metadata.providerLogo = providerNameToLogo(body?.weatherAlerts?.metadata?.providerName, "v2");
+                                                body.weatherAlerts = await InjectWeatherAlerts(body.weatherAlerts, Settings, enviroments);
                                                 Console.debug(`body.weatherAlerts: ${JSON.stringify(body?.weatherAlerts, null, 2)}`);
                                                 break;
                                             }
-                                            case "weatherChanges": {
-                                                if (body?.weatherChanges?.metadata?.providerName && !body?.weatherChanges?.metadata?.providerLogo) body.weatherChanges.metadata.providerLogo = providerNameToLogo(body?.weatherChanges?.metadata?.providerName, "v2");
-                                                break;
-                                            }
-                                            case "historicalComparisons": {
-                                                if (body?.historicalComparisons?.metadata?.providerName && !body?.historicalComparisons?.metadata?.providerLogo) body.historicalComparisons.metadata.providerLogo = providerNameToLogo(body?.historicalComparisons?.metadata?.providerName, "v2");
-                                                break;
-                                            }
                                             case "locationInfo": {
-                                                if (body?.locationInfo?.metadata?.providerName && !body?.locationInfo?.metadata?.providerLogo) body.locationInfo.metadata.providerLogo = providerNameToLogo(body?.locationInfo?.metadata?.providerName, "v2");
                                                 Console.debug(`body.locationInfo: ${JSON.stringify(body?.locationInfo, null, 2)}`);
                                                 break;
                                             }
@@ -250,6 +236,7 @@ async function InjectCurrentWeather(currentWeather, Settings, enviroments) {
     if (newCurrentWeather?.metadata) {
         newCurrentWeather.metadata = { ...currentWeather?.metadata, ...newCurrentWeather.metadata };
         currentWeather = { ...currentWeather, ...newCurrentWeather };
+        currentWeather.metadata.providerLogo ||= providerNameToLogo(currentWeather.metadata.providerName);
         //Console.debug(`currentWeather: ${JSON.stringify(currentWeather, null, 2)}`);
     }
     Console.info("✅ InjectCurrentWeather");
@@ -290,6 +277,7 @@ async function InjectForecastDaily(forecastDaily, Settings, enviroments) {
     if (newForecastDaily?.metadata) {
         forecastDaily.metadata = { ...forecastDaily?.metadata, ...newForecastDaily.metadata };
         Weather.mergeForecast(forecastDaily?.days, newForecastDaily?.days);
+        forecastDaily.metadata.providerLogo ||= providerNameToLogo(forecastDaily.metadata.providerName);
         //Console.debug(`forecastDaily: ${JSON.stringify(forecastDaily, null, 2)}`);
     }
     Console.info("✅ InjectForecastDaily");
@@ -330,6 +318,7 @@ async function InjectForecastHourly(forecastHourly, Settings, enviroments) {
     if (newForecastHourly?.metadata) {
         forecastHourly.metadata = { ...forecastHourly?.metadata, ...newForecastHourly.metadata };
         forecastHourly.hours = Weather.mergeForecast(forecastHourly?.hours, newForecastHourly?.hours);
+        forecastHourly.metadata.providerLogo ||= providerNameToLogo(forecastHourly.metadata.providerName);
         //Console.debug(`forecastHourly: ${JSON.stringify(forecastHourly, null, 2)}`);
     }
     Console.info("✅ InjectForecastHourly");
@@ -368,6 +357,7 @@ async function InjectForecastNextHour(forecastNextHour, Settings, enviroments) {
     if (newForecastNextHour?.metadata) {
         newForecastNextHour.metadata = { ...forecastNextHour?.metadata, ...newForecastNextHour.metadata };
         forecastNextHour = { ...forecastNextHour, ...newForecastNextHour };
+        forecastNextHour.metadata.providerLogo ||= providerNameToLogo(forecastNextHour.metadata.providerName);
         Console.debug(`forecastNextHour: ${JSON.stringify(forecastNextHour, null, 2)}`);
     }
     Console.info("✅ InjectForecastNextHour");
@@ -379,53 +369,39 @@ async function InjectForecastNextHour(forecastNextHour, Settings, enviroments) {
  * @param {any} weatherAlerts - 预警集合数据对象
  * @param {import('./types').Settings} Settings - 设置对象
  * @param {any} enviroments - 环境变量
- * @param {any} parameters - 解析后的 WeatherKit 请求参数
- * @param {URL} url - 原始 WeatherKit 请求 URL
  * @returns {Promise<any>} 补全后的预警集合数据
  */
-async function InjectWeatherAlerts(weatherAlerts, Settings, enviroments, parameters, url) {
+async function InjectWeatherAlerts(weatherAlerts, Settings, enviroments) {
     Console.info("☑️ InjectWeatherAlerts");
-
-    switch (weatherAlerts?.metadata?.providerName) {
-        case "国家预警信息发布中心":
-        case "國家預警信息發布中心":
-        case "National Early Warning Center": {
-            let newWeatherAlerts;
-            switch (Settings?.WeatherAlerts?.Provider) {
-                case "ColorfulClouds":
-                    newWeatherAlerts = await enviroments.colorfulClouds.WeatherAlert();
-                    weatherAlerts.metadata.attributionUrl = "https://www.caiyunapp.com/h5";
-                    break;
-                case "QWeather":
-                default:
-                    newWeatherAlerts = await enviroments.qWeather.WeatherAlert();
-                    weatherAlerts.metadata.attributionUrl = "https://developer.qweather.com/attribution.html";
-                    break;
-            }
-
-            if (Console.logLevel === "DEBUG" || Console.logLevel === "ALL") {
-                Console.debug(
-                    "InjectWeatherAlerts",
-                    `country: ${enviroments.country}`,
-                    `providerName: ${weatherAlerts?.metadata?.providerName}`,
-                    `appleAlertCount: ${weatherAlerts?.alerts?.length ?? 0}`,
-                    `sourceAlertCount: ${newWeatherAlerts?.alerts?.length ?? 0}`,
-                    `sourceAreaName: ${newWeatherAlerts?.areaName}`,
-                    `sourceIssuedBy: ${newWeatherAlerts?.source}`,
-                );
-            }
-            WeatherAlerts.mergeAlerts(weatherAlerts?.alerts, newWeatherAlerts?.alerts);
-
-            weatherAlerts.detailsUrl = `https://weatherkit.apple.com/alertDetails/index.html?ids=${weatherAlerts.metadata.latitude},${weatherAlerts.metadata.longitude}&lang=${encodeURIComponent(weatherAlerts.metadata.language)}&party=${encodeURIComponent(Settings?.WeatherAlerts?.Provider ?? "QWeather")}`;
-
-            Console.info("✅ InjectWeatherAlerts");
-            return weatherAlerts;
+    const provider = Settings?.WeatherAlerts?.Provider ?? "QWeatherWeb";
+    const isNationalWarningCenter = ["国家预警信息发布中心", "國家預警信息發布中心", "National Early Warning Center"].includes(weatherAlerts?.metadata?.providerName);
+    let newWeatherAlerts;
+    switch (provider) {
+        case "WeatherKit": {
+            break;
         }
-        default:
-            if (Console.logLevel === "DEBUG" || Console.logLevel === "ALL") Console.debug("InjectWeatherAlerts", "skip: providerName is not National Warning Center", `providerName: ${weatherAlerts?.metadata?.providerName}`);
-            Console.info("✅ InjectWeatherAlerts");
-            return weatherAlerts;
+        case "ColorfulClouds": {
+            if (isNationalWarningCenter) newWeatherAlerts = await enviroments.colorfulClouds.WeatherAlert();
+            break;
+        }
+        case "QWeather": {
+            if (isNationalWarningCenter) newWeatherAlerts = await enviroments.qWeather.WeatherAlert();
+            break;
+        }
+        case "QWeatherWeb":
+        default: {
+            newWeatherAlerts = await enviroments.qWeather.WeatherAlertWeb(weatherAlerts?.detailsUrl);
+            break;
+        }
     }
+    if (newWeatherAlerts?.metadata) {
+        weatherAlerts.metadata = { ...weatherAlerts?.metadata, ...newWeatherAlerts.metadata };
+        weatherAlerts.detailsUrl = newWeatherAlerts.detailsUrl ?? weatherAlerts.detailsUrl;
+        weatherAlerts.alerts = WeatherAlerts.mergeAlerts(weatherAlerts?.alerts, newWeatherAlerts?.alerts);
+        weatherAlerts.metadata.providerLogo ||= providerNameToLogo(weatherAlerts.metadata.providerName);
+    }
+    Console.info("✅ InjectWeatherAlerts");
+    return weatherAlerts;
 }
 
 /**
@@ -470,7 +446,7 @@ async function InjectAirQuality(airQuality, Settings, Caches, enviroments) {
     ];
 
     // Step6. 选取首个有效 provider，生成统一 logo
-    const firstValidProvider = weatherKitMetadata?.providerName || pollutantMetadata?.providerName || indexMetadata?.providerName || comparisonMetadata?.providerName;
+    const providerLogo = providerNameToLogo(weatherKitMetadata?.providerName || pollutantMetadata?.providerName || indexMetadata?.providerName || comparisonMetadata?.providerName);
 
     // Step7. 合并输出：优先使用可用注入结果，并统一 metadata / pollutants / previousDayComparison
     airQuality = {
@@ -479,7 +455,7 @@ async function InjectAirQuality(airQuality, Settings, Caches, enviroments) {
         metadata: {
             ...(airQuality?.metadata ? airQuality.metadata : injectedPollutants?.metadata),
             providerName: providers.join("\n"),
-            ...(firstValidProvider ? { providerLogo: providerNameToLogo(firstValidProvider, "v2") } : {}),
+            ...(providerLogo ? { providerLogo } : {}),
         },
         pollutants: AirQuality.ConvertPollutants(airQuality, injectedPollutants, needInjectIndex, injectedIndex, Settings) ?? [],
         previousDayComparison: injectedComparison?.previousDayComparison ?? AirQuality.Config.CompareCategoryIndexes.UNKNOWN,
