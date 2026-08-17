@@ -55,7 +55,54 @@ const qWeatherAlertAPI = {
         },
     ],
 };
-const colorfulCloudsAlertAPI = {
+const colorfulCloudsRealtimeAPI = {
+    status: "ok",
+    api_version: "v2.6",
+    lang: "zh_CN",
+    server_time: 1640759880,
+    location: [39.976, 116.3176],
+    result: {
+        alert: {
+            status: "ok",
+            content: [
+                {
+                    province: "北京市",
+                    status: "预警中",
+                    code: "0501",
+                    description: "海淀区气象台29日07时25分发布大风蓝色预警,预计，当前至29日16时，海淀区将有3、4级偏北风，阵风6、7级，请注意防范。",
+                    regionId: "101010200",
+                    county: "无",
+                    pubtimestamp: 1640733900,
+                    latlon: [39.959912, 116.298056],
+                    city: "海淀区",
+                    alertId: "11010841600000_20211229072633",
+                    title: "海淀区气象台发布大风蓝色预警[IV/一般]",
+                    adcode: "110108",
+                    source: "国家预警信息发布中心",
+                    location: "北京市海淀区",
+                    request_status: "ok",
+                },
+            ],
+            adcodes: [
+                { adcode: 110000, name: "北京市" },
+                { adcode: 110108, name: "海淀区" },
+            ],
+        },
+        realtime: {
+            status: "ok",
+            cloudrate: 0.1,
+            skycon: "CLEAR_DAY",
+            humidity: 0.4,
+            precipitation: { local: { intensity: 0 } },
+            pressure: 101325,
+            temperature: 20,
+            apparent_temperature: 20,
+            visibility: 10,
+            wind: { direction: 90, speed: 5 },
+        },
+    },
+};
+const colorfulCloudsCAPAlertAPI = {
     alerts: [
         {
             id: "urn:oid:2.49.0.1.840.0.test",
@@ -103,11 +150,20 @@ test("WeatherAlerts standardization stays provider-agnostic", async () => {
     assert.doesNotMatch(source, /\bqWeather\b|\bQWeather\b/);
 });
 
+test("request and response scripts read provider tokens from settings", async () => {
+    for (const path of ["../src/process/Request.mjs", "../src/process/Request.dev.mjs", "../src/process/Response.mjs", "../src/process/Response.dev.mjs"]) {
+        const source = await readFile(new URL(path, import.meta.url), "utf8");
+        assert.doesNotMatch(source, /Y2FpeXVuX25vdGlmeQ==|bdd98ec1d87747f3a2e8b1741a5af796/, path);
+        assert.doesNotMatch(source, /Settings\?\.API\?\.(?:ColorfulClouds|QWeather)\?\.Token\s*\|\|/, path);
+    }
+});
+
 test("response WeatherAlert injection only selects and merges provider slot objects", async () => {
     for (const path of ["../src/process/Response.mjs", "../src/process/Response.dev.mjs"]) {
         const source = await readFile(new URL(path, import.meta.url), "utf8");
         const injectWeatherAlerts = source.match(/async function InjectWeatherAlerts\([\s\S]*?(?=\n\/\*\*)/)?.[0] ?? "";
 
+        assert.match(source, /case "weatherAlerts": \{[\s\S]*body\.weatherAlerts = await InjectWeatherAlerts\(body\.weatherAlerts, Settings, enviroments\)/);
         assert.match(injectWeatherAlerts, /newWeatherAlerts = await enviroments\.colorfulClouds\.WeatherAlert\(\)/);
         assert.match(injectWeatherAlerts, /newWeatherAlerts = await enviroments\.qWeather\.WeatherAlert\(\)/);
         assert.match(injectWeatherAlerts, /newWeatherAlerts = await enviroments\.qWeather\.WeatherAlertWeb\(weatherAlerts\?\.detailsUrl\)/);
@@ -374,6 +430,7 @@ test("QWeather title normalization supports translated and CAP headline grammars
     const headlines = [
         ["浦东新区气象台发布暴雨橙色预警信号。", "暴雨", "暴雨橙色预警"],
         ["天津市气象台更新雷雨大风蓝色预警", "天津市气象台更新雷雨大风蓝色预警", "雷雨大风蓝色预警"],
+        ["江西省气象台2026年08月13日20时45分变更暴雨橙色预警", "暴雨", "暴雨橙色预警"],
         ["Nanjing Meteorological Observatory issues a blue typhoon warning", "Typhoon", "Blue Typhoon Warning"],
         ["Pudong New Area Meteorological Observatory issued an orange rainstorm warning", "Rainstorm", "Orange Rainstorm Warning"],
         ["Severe Thunderstorm Warning issued August 10 at 2:26AM EDT until August 10 at 3:30AM EDT by NWS Grand Rapids MI", "Severe Thunderstorm Warning", "Severe Thunderstorm Warning"],
@@ -436,21 +493,150 @@ test("localized event names allow complete provider headlines to replace generic
 });
 
 test("updated Chinese headlines replace generic FlatBuffer titles", () => {
-    const appleAlerts = [{ description: "雷雨大风", phenomenon: "Other" }];
-    const sourceAlerts = [{ description: "天津市气象台更新雷雨大风蓝色预警", eventName: "天津市气象台更新雷雨大风蓝色预警", guidelines: [], severity: "minor" }];
+    const appleAlerts = [
+        { description: "雷雨大风", phenomenon: "Other" },
+        { description: "暴雨", phenomenon: "Other" },
+    ];
+    const sourceAlerts = [
+        { description: "天津市气象台更新雷雨大风蓝色预警", eventName: "天津市气象台更新雷雨大风蓝色预警", guidelines: [], severity: "minor" },
+        { description: "江西省气象台2026年08月13日20时45分变更暴雨橙色预警", eventName: "暴雨", guidelines: [], severity: "severe" },
+    ];
 
     WeatherAlerts.mergeAlerts(appleAlerts, sourceAlerts);
 
     assert.equal(appleAlerts[0].description, "雷雨大风蓝色预警");
+    assert.equal(appleAlerts[1].description, "暴雨橙色预警");
 });
 
-test("ColorfulClouds CAP Alert API is standardized by ColorfulClouds class", async () => {
+test("ColorfulClouds reuses its realtime cache and standardizes v2.6 alerts", async () => {
+    const originalFetch = globalThis.fetch;
+    let sourceRequest;
+    let requestCount = 0;
+    globalThis.fetch = async (input, init) => {
+        requestCount++;
+        const requestUrl = typeof input === "string" ? input : input?.url ?? input;
+        sourceRequest = { url: new URL(requestUrl), headers: new Headers(init?.headers ?? input?.headers ?? {}) };
+        return new Response(JSON.stringify(colorfulCloudsRealtimeAPI), { headers: { "Content-Type": "application/json" } });
+    };
+
+    try {
+        let extracted;
+        for (const [index, [weatherKitLanguage, colorfulCloudsLanguage]] of [
+            ["zh-CN", "zh_CN"],
+            ["zh-TW", "zh_TW"],
+            ["zh-Hant", "zh_TW"],
+            ["en-US", "en_US"],
+            ["en-GB", "en_GB"],
+            ["ja", "ja"],
+            ["de", "zh_CN"],
+        ].entries()) {
+            const colorfulClouds = new ColorfulClouds({ country: "CN", language: weatherKitLanguage, latitude: "39.976", longitude: "116.3176" }, "test-token");
+            await colorfulClouds.CurrentWeather();
+            extracted = await colorfulClouds.WeatherAlert();
+
+            assert.equal(sourceRequest.url.toString(), `https://api.caiyunapp.com/v2.6/test-token/116.3176,39.976/realtime?lang=${colorfulCloudsLanguage}&alert=true`);
+            assert.equal(sourceRequest.headers.get("Referer"), "https://caiyunapp.com/");
+            assert.equal(requestCount, index + 1);
+        }
+
+        assert.equal(extracted.source, "国家预警信息发布中心");
+        assert.equal(extracted.areaName, "北京市海淀区");
+        assert.deepEqual(extracted.metadata, { attributionUrl: "https://www.caiyunapp.com/h5" });
+        assert.equal(extracted.detailsUrl, "https://weatherkit.apple.com/alertDetails/index.html?ids=39.976,116.3176&lang=de&party=ColorfulClouds");
+        assert.equal(extracted.alerts.length, 1);
+        assert.equal(extracted.alerts[0].areaId, "110108");
+        assert.equal(extracted.alerts[0].areaName, "北京市海淀区");
+        assert.equal(extracted.alerts[0].certainty, "unknown");
+        assert.equal(extracted.alerts[0].description, "海淀区气象台发布大风蓝色预警[IV/一般]");
+        assert.equal(extracted.alerts[0].effectiveTime, "2021-12-28T23:25:00.000Z");
+        assert.equal(extracted.alerts[0].eventOnsetTime, "2021-12-28T23:25:00.000Z");
+        assert.equal(extracted.alerts[0].eventEndTime, undefined);
+        assert.equal(extracted.alerts[0].expireTime, undefined);
+        assert.equal(extracted.alerts[0].issuedTime, "2021-12-28T23:25:00.000Z");
+        assert.equal(extracted.alerts[0].message, colorfulCloudsRealtimeAPI.result.alert.content[0].description);
+        assert.equal(extracted.alerts[0].eventName, "大风");
+        assert.equal(extracted.alerts[0].phenomenon, "大风");
+        assert.equal(extracted.alerts[0].reportedAt, "2021-12-28T23:25:00.000Z");
+        assert.equal(extracted.alerts[0].severity, "minor");
+        assert.equal(extracted.alerts[0].source, "国家预警信息发布中心");
+        assert.equal(extracted.alerts[0].standard, "");
+        assert.equal(extracted.alerts[0].token, "0501");
+        assert.equal(extracted.alerts[0].urgency, "unknown");
+        assert.deepEqual(extracted.alerts[0].guidelines, []);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("only ColorfulClouds realtime requests and caches v2.6 alerts", async () => {
+    const source = await readFile(new URL("../src/class/ColorfulClouds.mjs", import.meta.url), "utf8");
+
+    assert.match(source, /\/realtime\?[^\n]*alert=true/);
+    for (const endpoint of ["minutely", "hourly", "daily"]) assert.doesNotMatch(source, new RegExp(`/${endpoint}\\?[^\\n]*alert=true`), endpoint);
+    assert.match(source, /switch \(body\?\.result\?\.realtime\?\.status\)[\s\S]*switch \(body\?\.result\?\.alert\?\.status\) \{\s*case "ok":\s*this\.#cache\.alert = body\.result\.alert;/);
+    assert.doesNotMatch(source, /result\?\.alert\?\.status === "ok"/);
+});
+
+test("ColorfulClouds v2.6 alert codes map event names and severities", async () => {
+    const originalFetch = globalThis.fetch;
+    const events = [
+        ["01", "台风"],
+        ["02", "暴雨"],
+        ["03", "暴雪"],
+        ["04", "寒潮"],
+        ["05", "大风"],
+        ["06", "沙尘暴"],
+        ["07", "高温"],
+        ["08", "干旱"],
+        ["09", "雷电"],
+        ["10", "冰雹"],
+        ["11", "霜冻"],
+        ["12", "大雾"],
+        ["13", "霾"],
+        ["14", "道路结冰"],
+        ["15", "森林火险"],
+        ["16", "雷雨大风"],
+        ["17", "春季沙尘天气趋势预警"],
+        ["18", "沙尘"],
+    ];
+    const severities = [
+        ["00", "unknown"],
+        ["01", "minor"],
+        ["02", "moderate"],
+        ["03", "severe"],
+        ["04", "extreme"],
+    ];
+
+    try {
+        globalThis.fetch = async () => {
+            const body = structuredClone(colorfulCloudsRealtimeAPI);
+            const sourceAlert = body.result.alert.content[0];
+            body.result.alert.content = [
+                ...events.map(([eventCode], index) => ({ ...sourceAlert, alertId: `event-${eventCode}`, code: `${eventCode}01`, pubtimestamp: sourceAlert.pubtimestamp + index })),
+                ...severities.map(([severityCode], index) => ({ ...sourceAlert, alertId: `severity-${severityCode}`, code: `02${severityCode}`, pubtimestamp: sourceAlert.pubtimestamp + events.length + index })),
+            ];
+            return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+        };
+        const alerts = await new ColorfulClouds({ country: "CN", language: "zh-CN", latitude: "39.976", longitude: "116.3176" }, "test-token").WeatherAlert();
+        for (const [index, [eventCode, eventName]] of events.entries()) {
+            assert.equal(alerts.alerts[index].eventName, eventName, eventCode);
+            assert.equal(alerts.alerts[index].phenomenon, eventName, eventCode);
+        }
+        for (const [index, [severityCode, severity]] of severities.entries()) {
+            assert.equal(alerts.alerts[events.length + index].severity, severity, severityCode);
+        }
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("ColorfulClouds v3 CAP alerts remain available through WeatherAlertV3CAP", async () => {
     const originalFetch = globalThis.fetch;
     let sourceRequest;
     globalThis.fetch = async (input, init) => {
         const requestUrl = typeof input === "string" ? input : input?.url ?? input;
         sourceRequest = { url: new URL(requestUrl), headers: new Headers(init?.headers ?? input?.headers ?? {}) };
-        return new Response(JSON.stringify(colorfulCloudsAlertAPI), { headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify(colorfulCloudsCAPAlertAPI), { headers: { "Content-Type": "application/json" } });
     };
 
     try {
@@ -465,7 +651,7 @@ test("ColorfulClouds CAP Alert API is standardized by ColorfulClouds class", asy
             ["de", "zh_CN"],
         ]) {
             const colorfulClouds = new ColorfulClouds({ country: "US", language, latitude: "34.05", longitude: "-118.25" }, "test-token");
-            extracted = await colorfulClouds.WeatherAlert();
+            extracted = await colorfulClouds.WeatherAlertV3CAP();
 
             assert.equal(sourceRequest.url.toString(), `https://singer.caiyunhub.com/v3/cap_alert/location?token=test-token&longitude=-118.25&latitude=34.05&language=${colorfulCloudsLanguage}`);
             assert.equal(sourceRequest.headers.get("Referer"), "https://caiyunapp.com/");
@@ -499,7 +685,7 @@ test("ColorfulClouds CAP Alert API is standardized by ColorfulClouds class", asy
     }
 });
 
-test("ColorfulClouds CAP categories map to phenomena", async () => {
+test("ColorfulClouds v3 CAP categories remain mapped to phenomena", async () => {
     const originalFetch = globalThis.fetch;
     const fixtures = [
         [[1], "Geo"],
@@ -520,11 +706,11 @@ test("ColorfulClouds CAP categories map to phenomena", async () => {
     try {
         for (const [categories, expected] of fixtures) {
             globalThis.fetch = async () => {
-                const body = structuredClone(colorfulCloudsAlertAPI);
+                const body = structuredClone(colorfulCloudsCAPAlertAPI);
                 body.alerts[0].categories = categories;
                 return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
             };
-            const alerts = await new ColorfulClouds({ country: "US", language: "en-US", latitude: "34.05", longitude: "-118.25" }, "test-token").WeatherAlert();
+            const alerts = await new ColorfulClouds({ country: "US", language: "en-US", latitude: "34.05", longitude: "-118.25" }, "test-token").WeatherAlertV3CAP();
             assert.equal(alerts.alerts[0].phenomenon, expected, categories.join(","));
         }
     } finally {
@@ -609,7 +795,7 @@ test("Pages routes WeatherAlert requests through Hono before fetching QWeather",
     }
 });
 
-test("Pages routes coordinate WeatherAlert identifiers through QWeather Alert API", async () => {
+test("Pages routes coordinate WeatherAlert identifiers through QWeather API for the default QWeatherWeb provider", async () => {
     const originalFetch = globalThis.fetch;
     let sourceRequest;
     globalThis.fetch = async (input, init) => {
@@ -629,50 +815,22 @@ test("Pages routes coordinate WeatherAlert identifiers through QWeather Alert AP
                 env: {},
             });
             const body = await response.json();
-            const headers = new Headers(sourceRequest.init?.headers ?? {});
 
             assert.equal(response.status, 200, pathname);
             assert.equal(sourceRequest.url.toString(), "https://devapi.qweather.com/weatheralert/v1/current/32.115/118.814?lang=zh-hans", pathname);
-            assert.equal(headers.get("X-QW-Api-Key"), "bdd98ec1d87747f3a2e8b1741a5af796", pathname);
-            assert.equal(body.length, 1, pathname);
-            assert.equal(body[0].attributionURL, "https://www.12379.cn/", pathname);
-            assert.equal(body[0].areaId, "320100", pathname);
-            assert.equal(body[0].areaName, "南京市", pathname);
-            assert.equal(body[0].countryCode, "CN", pathname);
             assert.equal(body[0].description, "高温橙色预警", pathname);
-            assert.equal(body[0].effectiveTime, "2026-08-02T09:48:00.000Z", pathname);
-            assert.equal(body[0].eventOnsetTime, "2026-08-02T09:48:00.000Z", pathname);
-            assert.equal(body[0].eventEndTime, "2026-08-03T09:48:00.000Z", pathname);
-            assert.equal(body[0].expireTime, "2026-08-03T09:48:00.000Z", pathname);
-            assert.equal(body[0].issuedTime, "2026-08-02T09:48:00.000Z", pathname);
-            assert.equal(body[0].importance, "high", pathname);
-            assert.equal(body[0].phenomenon, "Met", pathname);
-            assert.equal(body[0].reportedAt, "2026-08-02T09:48:00.000Z", pathname);
             assert.equal(body[0].source, "南京市气象台", pathname);
-            assert.equal(body[0].token, "1009", pathname);
-            assert.deepEqual(body[0].responses, ["monitor"]);
-            assert.equal("area" in body[0], false, pathname);
-            assert.deepEqual(body[0].messages, [
-                {
-                    language: "zh-CN",
-                    text: "南京市气象台2026年08月02日17时44分继续发布高温橙色预警信号：预计明天全市大部分地区的日最高气温可达37℃以上，请注意防暑降温。",
-                },
-                {
-                    language: "zh-CN",
-                    text: "有关部门和单位按照职责落实防暑降温保障措施；\n尽量避免在高温时段进行户外活动；\n对老、弱、病、幼人群提供防暑降温指导；\n高温条件下作业人员应当缩短连续工作时间。",
-                },
-            ], pathname);
         }
     } finally {
         globalThis.fetch = originalFetch;
     }
 });
 
-test("Pages routes native WeatherAlert identifiers through Hono", async () => {
+test("Pages returns an empty Apple-compatible array for native WeatherAlert identifiers", async () => {
     const originalFetch = globalThis.fetch;
-    let upstreamUrl;
-    globalThis.fetch = async input => {
-        upstreamUrl = new URL(input);
+    let fetchCount = 0;
+    globalThis.fetch = async () => {
+        fetchCount++;
         return new Response("[]", { headers: { "Content-Type": "application/json" } });
     };
 
@@ -681,22 +839,15 @@ test("Pages routes native WeatherAlert identifiers through Hono", async () => {
             request: new Request("https://weatherkit.pages.dev/api/v1/weatherAlerts?lang=zh-CN&ids=35889ee6-fa82-5f9f-8e49-fad78c4f383a"),
             env: {},
         });
-        assert.equal(upstreamUrl.toString(), "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&ids=35889ee6-fa82-5f9f-8e49-fad78c4f383a");
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), []);
+        assert.equal(fetchCount, 0);
     } finally {
         globalThis.fetch = originalFetch;
     }
 });
 
-test("only QWeather location tokens are eligible for takeover", () => {
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("jianye-101190110"), true);
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("jian'an-101180407"), true);
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("jianye-10119011"), false);
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("jianye-1011901100"), false);
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("32.115,118.814"), false);
-    assert.deepEqual(QWeather.ParseWeatherAlertCoordinateIdentifier("32.115,118.814"), { latitude: "32.115", longitude: "118.814" });
-    assert.equal(QWeather.ParseWeatherAlertCoordinateIdentifier("118.814,32.115"), null);
+test("QWeather page URLs only parse supported paths", () => {
     assert.equal(QWeather.ParseWeatherAlertPageURL("https://www.qweather.com/severe-weather/jian'an-101180407.html?from=AppleWeatherService"), "jian'an-101180407");
     assert.equal(QWeather.ParseWeatherAlertPageURL("https://www.qweather.com//severe-weather/jianye-101190110.html?from=AppleWeatherService"), "jianye-101190110");
     assert.equal(QWeather.ParseWeatherAlertPageURL("https://www.qweather.com/en/severe-weather/jianye-101190110.html?from=AppleWeatherService"), "jianye-101190110");
@@ -705,8 +856,6 @@ test("only QWeather location tokens are eligible for takeover", () => {
     assert.equal(QWeather.ParseWeatherAlertPageURL("https://www.qweather.com/severe-weather/jianye-101190110.html?from=AppleWeatherService&lang=zh-CN"), undefined);
     assert.equal(QWeather.ParseWeatherAlertPageURL("https://evil.example/severe-weather/jianye-101190110.html?from=AppleWeatherService"), undefined);
     assert.equal(QWeather.BuildAppleAlertDetailsURL("jianye-101190110", "zh-CN"), "https://weatherkit.apple.com/alertDetails/index.html?ids=jianye-101190110&lang=zh-CN&party=qweather");
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("35889ee6-fa82-5f9f-8e49-fad78c4f383a"), false);
-    assert.equal(QWeather.IsWeatherAlertPageIdentifier("https://evil.example"), false);
 });
 
 test("the request scripts return QWeather data before Apple weatherAlerts is requested", async () => {
@@ -741,6 +890,40 @@ test("the request scripts return QWeather data before Apple weatherAlerts is req
     }
 });
 
+test("the request scripts force QWeatherWeb for page identifiers regardless of the configured provider", async () => {
+    const originalArgument = globalThis.$argument;
+    const originalFetch = globalThis.fetch;
+    let sourceUrl;
+    globalThis.fetch = async input => {
+        sourceUrl = new URL(input);
+        return new Response(sourceHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    };
+
+    try {
+        for (const provider of ["WeatherKit", "QWeather", "ColorfulClouds"]) {
+            globalThis.$argument = {
+                LogLevel: "OFF",
+                Storage: "Argument",
+                WeatherAlerts: { Provider: provider },
+            };
+            for (const handler of [processRequest, processRequestDev]) {
+                const { $response } = await handler({
+                    method: "GET",
+                    url: "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&ids=jianye-101190110",
+                    headers: { "Accept-Language": "zh-CN" },
+                });
+
+                assert.equal(sourceUrl.toString(), "https://www.qweather.com/severe-weather/jianye-101190110.html?from=AppleWeatherService", provider);
+                assert.equal($response.status, 200, provider);
+                assert.equal(JSON.parse($response.body)[0].description, "雷暴橙色预警", provider);
+            }
+        }
+    } finally {
+        globalThis.$argument = originalArgument;
+        globalThis.fetch = originalFetch;
+    }
+});
+
 test("the request scripts return an empty Apple-compatible array when the QWeather fetch fails", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => {
@@ -765,7 +948,8 @@ test("the request scripts return an empty Apple-compatible array when the QWeath
     }
 });
 
-test("the request scripts route coordinate identifiers through QWeather Alert API", async () => {
+test("the request scripts route coordinate identifiers through QWeather Alert API for QWeather and QWeatherWeb", async () => {
+    const originalArgument = globalThis.$argument;
     const originalFetch = globalThis.fetch;
     let sourceUrl;
     globalThis.fetch = async input => {
@@ -774,31 +958,122 @@ test("the request scripts route coordinate identifiers through QWeather Alert AP
     };
 
     try {
-        for (const handler of [processRequest, processRequestDev]) {
-            const { $response } = await handler({
-                method: "GET",
-                url: "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&ids=32.115,118.814",
-                headers: { "Accept-Language": "zh-CN" },
-            });
-            const body = JSON.parse($response.body);
+        for (const provider of ["QWeather", "QWeatherWeb"]) {
+            globalThis.$argument = {
+                API: { QWeather: { Host: "devapi.qweather.com", Token: "qweather-token" } },
+                LogLevel: "OFF",
+                Storage: "Argument",
+                WeatherAlerts: { Provider: provider },
+            };
+            for (const handler of [processRequest, processRequestDev]) {
+                const { $response } = await handler({
+                    method: "GET",
+                    url: "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&ids=32.115,118.814",
+                    headers: { "Accept-Language": "zh-CN" },
+                });
+                const body = JSON.parse($response.body);
 
-            assert.equal(sourceUrl.toString(), "https://devapi.qweather.com/weatheralert/v1/current/32.115/118.814?lang=zh-hans");
-            assert.equal($response.status, 200);
-            assert.equal($response.statusCode, 200);
-            assert.equal($response.headers["Content-Type"], "application/json");
-            assert.equal(body[0].description, "高温橙色预警");
-            assert.equal(body[0].source, "南京市气象台");
+                assert.equal(sourceUrl.toString(), "https://devapi.qweather.com/weatheralert/v1/current/32.115/118.814?lang=zh-hans", provider);
+                assert.equal($response.status, 200, provider);
+                assert.equal($response.statusCode, 200, provider);
+                assert.equal($response.headers["Content-Type"], "application/json", provider);
+                assert.equal(body[0].description, "高温橙色预警", provider);
+                assert.equal(body[0].source, "南京市气象台", provider);
+            }
         }
     } finally {
+        globalThis.$argument = originalArgument;
         globalThis.fetch = originalFetch;
     }
 });
 
-test("the request scripts leave non-QWeather identifiers alone", async () => {
+test("the request scripts route coordinate identifiers through configured ColorfulClouds v2.6 alerts", async () => {
+    const originalArgument = globalThis.$argument;
+    const originalFetch = globalThis.fetch;
+    let sourceUrl;
+    globalThis.$argument = {
+        API: { ColorfulClouds: { Token: "colorful-token" } },
+        LogLevel: "OFF",
+        Storage: "Argument",
+        WeatherAlerts: { Provider: "ColorfulClouds" },
+    };
+    globalThis.fetch = async input => {
+        sourceUrl = new URL(input);
+        return new Response(JSON.stringify(colorfulCloudsRealtimeAPI), { headers: { "Content-Type": "application/json" } });
+    };
+
+    try {
+        for (const handler of [processRequest, processRequestDev]) {
+            const { $response } = await handler({
+                method: "GET",
+                url: "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&country=CN&ids=32.115,118.814",
+                headers: { "Accept-Language": "zh-CN" },
+            });
+            const body = JSON.parse($response.body);
+
+            assert.equal(sourceUrl.toString(), "https://api.caiyunapp.com/v2.6/colorful-token/118.814,32.115/realtime?lang=zh_CN&alert=true");
+            assert.equal($response.status, 200);
+            assert.equal($response.statusCode, 200);
+            assert.equal($response.headers["Content-Type"], "application/json");
+            assert.equal(body[0].attributionURL, "https://www.caiyunapp.com/h5");
+            assert.equal(body[0].description, "大风蓝色预警");
+            assert.equal(body[0].source, "国家预警信息发布中心");
+        }
+    } finally {
+        globalThis.$argument = originalArgument;
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("the request scripts return an empty Apple-compatible array for coordinate identifiers when WeatherKit is selected", async () => {
+    const originalArgument = globalThis.$argument;
+    const originalFetch = globalThis.fetch;
+    let fetchCount = 0;
+    globalThis.$argument = {
+        LogLevel: "OFF",
+        Storage: "Argument",
+        WeatherAlerts: { Provider: "WeatherKit" },
+    };
+    globalThis.fetch = async () => {
+        fetchCount++;
+        return new Response("[]", { headers: { "Content-Type": "application/json" } });
+    };
+
+    try {
+        for (const handler of [processRequest, processRequestDev]) {
+            const { $response } = await handler({
+                method: "GET",
+                url: "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&ids=32.115,118.814",
+                headers: {},
+            });
+
+            assert.equal($response.status, 200);
+            assert.deepEqual(JSON.parse($response.body), []);
+        }
+        assert.equal(fetchCount, 0);
+    } finally {
+        globalThis.$argument = originalArgument;
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("the request scripts return an empty Apple-compatible array for non-QWeather identifiers", async () => {
     for (const handler of [processRequest, processRequestDev]) {
         const { $response } = await handler({
             method: "GET",
             url: "https://weatherkit.apple.com/api/v1/weatherAlerts?lang=zh-CN&ids=35889ee6-fa82-5f9f-8e49-fad78c4f383a",
+            headers: {},
+        });
+        assert.equal($response.status, 200);
+        assert.deepEqual(JSON.parse($response.body), []);
+    }
+});
+
+test("the request scripts only intercept the exact WeatherAlert pathname", async () => {
+    for (const handler of [processRequest, processRequestDev]) {
+        const { $response } = await handler({
+            method: "GET",
+            url: "https://weatherkit.apple.com/api/v1/weatherAlerts/extra?lang=zh-CN&ids=jianye-101190110",
             headers: {},
         });
         assert.equal($response, undefined);

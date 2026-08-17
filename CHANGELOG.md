@@ -1,15 +1,21 @@
 ### 🆕 New Features
-  * 新增天气预警数据源设置：默认从 FlatBuffer 的 QWeather 灾害预警链接抓取并解析网页，同时保留用户自定义 QWeather API、彩云天气 API 和 WeatherKit 原始数据三种选项。 @VirgilClyne
-  * QWeather 网页预警现在由数据源方法直接生成完整的 `weatherAlerts` 顶级对象，并将详情链接转换为 WeatherKit 域名的内部链接。 @VirgilClyne
+  * 新增加拿大 AQHI、香港 AQHI、AQHI-Multi（中国 / 中国+香港）及中国致死风险 AQHI（中国 / 中国+香港）六种空气质量健康指数算法，并可直接在插件与模块参数中选择。 @WordlessEcho
+  * 新增 WeatherKit 兼容的香港与中国 AQHI 本地标尺响应，包含多语言名称、健康风险等级、颜色渐变和健康建议。 @WordlessEcho
+  * 在正式版模块参数中开放 `AirQuality.Current.Pollutants.Provider`，可选择彩云天气或和风天气提供当前污染物数据。 @VirgilClyne
 
 ### 🛠️ Bug Fixes
-  * 修复 QWeather 网页预警标题裁剪，移除“天津市气象台更新”等发布机构前缀，同时保留“雷雨大风蓝色预警”等完整等级标题。 @VirgilClyne
-  * 拆分 QWeather 地区标识和 API 坐标两条天气预警规则：地区标识严格匹配 9 位 Location ID，坐标继续交给用户配置的 API 处理，并在 Rewrite 模板与各客户端模块中保持一致。 @VirgilClyne
+  * 修正香港 AQHI 标尺的颜色、风险说明、语言回退与地区代码，并使本地标尺响应头与 WeatherKit 保持一致。 @WordlessEcho
+  * 为正式版与开发版的 Surge、Loon、Quantumult X 和 Stash 补齐 `airQualityScale` 请求规则及 Stash 脚本提供器；统一裁剪标尺标识末尾的数字版本并按完整路径返回香港与中国 AQHI 本地标尺，避免版本化链接请求 Apple 时返回 404。 @WordlessEcho @VirgilClyne
+  * 修复 Stash 天气预警请求规则缺少必填 `type: request`、导致覆写配置无效的问题。 @VirgilClyne
+  * 修复天气预警请求未按标识类型正确处理的问题：页面地区标识固定使用和风天气网页，坐标标识按所选数据源处理且 `QWeatherWeb` 自动使用和风天气 API，原生或不支持的标识返回 WeatherKit 兼容的空结果。 @VirgilClyne
+  * 将 `weatherAlerts` 纳入正式版默认可配置数据集，避免启用天气预警数据源后请求遗漏预警数据。 @VirgilClyne
+  * 补充彩云天气与和风天气的默认服务令牌并统一请求、响应脚本的读取路径，未自定义令牌时仍可使用对应天气服务。 @VirgilClyne
+  * 恢复正式构建生成普通 Egern 模块 `iRingo.WeatherKit.yaml`。 @VirgilClyne
 
 ### ‼️ Breaking Changes
   * none
 
 ### 🔄 Other Changes
-  * 将天气预警来源的 HTML 抓取、字段解析、`detailsUrl`、`attributionUrl` 和 metadata 构造收拢到 QWeather 与彩云天气数据源方法，Response 仅负责选择来源并合并顶级 slot。 @VirgilClyne
-  * 将数据源标志补全收拢到实际注入流程；WeatherKit 直通和仅解析的数据不再被修改，空值、Apple、WeatherKit 与未知来源不再补充标志。 @VirgilClyne
-  * 将 QWeather 内部版本更新至 `v5.3.0`、彩云天气内部版本更新至 `v4.2.2`，并补充 HTML 解析、数据源切换、严格 9 位地区标识和原始数据直通的回归测试。 @VirgilClyne
+  * 拆分 release、full 与 dev 参数构建配置：正式模块只暴露已支持的设置，完整设置保留给 BoxJS，开发模块使用独立模板、脚本与输出名称。 @VirgilClyne
+  * 扩展空气质量数据源标志与标尺映射，使新增 AQHI 算法在计算、单位转换和 WeatherKit 编码流程中保持一致。 @WordlessEcho
+  * 将 AQHI 算法迁移为无版本标尺标识，并统一 `AirQualityScale` 的配置、路径解析与本地响应构建；所有 `airQualityScale` 链接处理由 Request 脚本负责。 @VirgilClyne

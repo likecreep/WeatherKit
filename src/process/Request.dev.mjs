@@ -1,8 +1,11 @@
 import { Lodash as _, Console, Storage } from "@nsnanocat/util";
+import AirQualityScale from "../class/AirQualityScale.mjs";
+import ColorfulClouds from "../class/ColorfulClouds.mjs";
 import QWeather from "../class/QWeather.mjs";
 import WeatherAlerts from "../class/WeatherAlerts.mjs";
 import WeatherKit2 from "../class/WeatherKit2.mjs";
 import database from "../function/database.mjs";
+import parseWeatherKitURL from "../function/parseWeatherKitURL.mjs";
 import setENV from "../function/setENV.mjs";
 /***************** Processing *****************/
 export async function Request($request) {
@@ -11,6 +14,7 @@ export async function Request($request) {
     // 解构URL
     const url = new URL($request.url);
     Console.info(`url: ${url.toJSON()}`);
+    const parameters = parseWeatherKitURL(url);
     // 解析格式
     const FORMAT = ($request.headers?.["Content-Type"] ?? $request.headers?.["content-type"])?.split(";")?.[0];
     Console.info(`FORMAT: ${FORMAT}`);
@@ -18,7 +22,7 @@ export async function Request($request) {
      * 设置
      * @type {{Settings: import('./types').Settings}}
      */
-    const { Settings, Caches, Configs } = setENV("iRingo", "WeatherKit", database);
+    const { Settings, Caches } = setENV("iRingo", "WeatherKit", database);
     // 方法判断
     switch ($request.method) {
         case "POST":
@@ -89,76 +93,49 @@ export async function Request($request) {
             switch (url.hostname) {
                 case "weatherkit.apple.com":
                     // 路径判断
-                    switch (true) {
-                        case url.pathname === "/api/v1/weatherAlerts": {
-                            const identifier = url.searchParams.get("ids");
-                            const language = url.searchParams.get("lang")?.trim() || "zh-CN";
-                            const country = url.searchParams.get("country")?.toUpperCase() || "CN";
-                            const isQWeatherPage = QWeather.IsWeatherAlertPageIdentifier(identifier);
-                            const coordinates = QWeather.ParseWeatherAlertCoordinateIdentifier(identifier);
-                            if (!isQWeatherPage && !coordinates) break;
-                            const handlerName = coordinates ? "QWeather.WeatherAlert" : "QWeather.FetchWeatherAlertPage";
-                            Console.info(`☑️ ${handlerName}`, `ids: ${identifier}`);
-                            let body;
-                            try {
-                                if (coordinates) {
-                                    const qWeather = new QWeather({ ...coordinates, country, language }, Settings?.API?.QWeather?.Token || "bdd98ec1d87747f3a2e8b1741a5af796", Settings?.API?.QWeather?.Host);
-                                    body = WeatherAlerts.Build(await qWeather.WeatherAlert(), {
-                                        attributionUrl: "https://www.12379.cn/",
-                                        identifier: `${coordinates.latitude},${coordinates.longitude}`,
-                                        language,
-                                        countryCode: country,
-                                    });
-                                } else {
-                                    const source = await QWeather.FetchWeatherAlertPage(identifier, language, $request.headers);
-                                    body = WeatherAlerts.Build(source, {
-                                        attributionUrl: QWeather.BuildWeatherAlertPageURL(identifier, language, false),
-                                        identifier,
-                                        language,
-                                        countryCode: identifier.match(/-([0-9]+)$/)?.[1]?.startsWith("101") ? "CN" : "",
-                                    });
-                                }
-                            } catch (error) {
-                                Console.error(handlerName, error?.stack ?? error?.message ?? String(error));
-                                body = [];
-                            }
-                            if (!Array.isArray(body)) {
-                                Console.warn(handlerName, `unexpectedBodyType: ${typeof body}`);
-                                body = [];
-                            }
-                            Console.info(`✅ ${handlerName}`, `alerts: ${body.length}`, "status: 200");
-                            $response = {
-                                status: 200,
-                                statusCode: 200,
-                                headers: {
-                                    "Access-Control-Allow-Origin": "*",
-                                    "Cache-Control": "max-age=0",
-                                    "Content-Type": "application/json",
-                                },
-                                body: JSON.stringify(body),
-                            };
+                    switch (url.pathname) {
+                        case "/api/v1/weatherAlerts": {
+                            $response = await GetWeatherAlerts(url.searchParams.get("ids")?.trim(), parameters, Settings, $request.headers);
                             break;
                         }
-                        case url.pathname.startsWith("/api/v2/weather/"): {
-                            // 解决 macOS 天气 app 如果使用国际版 Maps 时，country 丢失不显示未来一小时降水的问题
+                        default:
                             switch (true) {
-                                case $request.headers["User-Agent"]?.startsWith("WeatherKit_Weather_macOS_Version"):
-                                case $request.headers["user-agent"]?.startsWith("WeatherKit_Weather_macOS_Version"):
-                                    if (url.searchParams.has("country")) {
-                                        //if (url.searchParams.get("country") === "CN") url.searchParams.set("country", "TW");
-                                    } else {
-                                        const gcc = Storage.getItem("@iRingo.Location.Caches")?.pep?.gcc;
-                                        if (gcc) url.searchParams.set("country", gcc);
+                                case url.pathname.startsWith("/api/v1/airQualityScale/"): {
+                                    const { version, language } = parameters;
+                                    const scaleName = parameters.scale?.replace(/\.\d+$/, "");
+                                    if (version && language && scaleName) {
+                                        url.pathname = `/api/${version}/airQualityScale/${language}/${scaleName}`;
+                                        switch (url.pathname) {
+                                            case `/api/v1/airQualityScale/${language}/HK.AQHI`:
+                                            case `/api/v1/airQualityScale/${language}/CN.AQHI`:
+                                                $response = new AirQualityScale().Build(language, scaleName);
+                                                break;
+                                        }
                                     }
                                     break;
-                            }
-                            let dataSets = url.searchParams.get("dataSets")?.split(",");
-                            if (dataSets) {
-                                dataSets = WeatherKit2.filterRootNames(dataSets, Settings.DataSets);
-                                url.searchParams.set("dataSets", dataSets?.join(","));
+                                }
+                                case url.pathname.startsWith("/api/v2/weather/"): {
+                                    // 解决 macOS 天气 app 如果使用国际版 Maps 时，country 丢失不显示未来一小时降水的问题
+                                    switch (true) {
+                                        case $request.headers["User-Agent"]?.startsWith("WeatherKit_Weather_macOS_Version"):
+                                        case $request.headers["user-agent"]?.startsWith("WeatherKit_Weather_macOS_Version"):
+                                            if (url.searchParams.has("country")) {
+                                                //if (url.searchParams.get("country") === "CN") url.searchParams.set("country", "TW");
+                                            } else {
+                                                const gcc = Storage.getItem("@iRingo.Location.Caches")?.pep?.gcc;
+                                                if (gcc) url.searchParams.set("country", gcc);
+                                            }
+                                            break;
+                                    }
+                                    let dataSets = url.searchParams.get("dataSets")?.split(",");
+                                    if (dataSets) {
+                                        dataSets = WeatherKit2.filterRootNames(dataSets, Settings.DataSets);
+                                        url.searchParams.set("dataSets", dataSets?.join(","));
+                                    }
+                                    break;
+                                }
                             }
                             break;
-                        }
                     }
                     break;
                 case "weather-map2.apple.com": {
@@ -195,4 +172,72 @@ export async function Request($request) {
     $request.url = url.toString();
     Console.debug(`$request.url: ${$request.url}`);
     return { $request, $response };
+}
+
+/**
+ * 获取天气预警响应
+ * @param {string | undefined} identifier - 预警标识
+ * @param {ReturnType<typeof parseWeatherKitURL>} parameters - WeatherKit 请求参数
+ * @param {import('../types').Settings} Settings - 设置对象
+ * @param {Record<string, string>} headers - 请求头
+ * @returns {Promise<object>} 天气预警响应
+ */
+async function GetWeatherAlerts(identifier, parameters, Settings, headers) {
+    let body = [];
+    try {
+        switch (true) {
+            case /^[^&#]*-[0-9]{9}$/.test(identifier): {
+                Console.info("☑️ QWeather.FetchWeatherAlertPage", `ids: ${identifier}`);
+                const source = await QWeather.FetchWeatherAlertPage(identifier, parameters.language, headers);
+                body = WeatherAlerts.Build(source, {
+                    attributionUrl: QWeather.BuildWeatherAlertPageURL(identifier, parameters.language, false),
+                    identifier,
+                    language: parameters.language,
+                    countryCode: identifier.match(/-([0-9]+)$/)?.[1]?.startsWith("101") ? "CN" : "",
+                });
+                break;
+            }
+            case /^-?[0-9]+(?:\.[0-9]+)?,-?[0-9]+(?:\.[0-9]+)?$/.test(identifier): {
+                switch (Settings?.WeatherAlerts?.Provider) {
+                    case "ColorfulClouds": {
+                        Console.info("☑️ ColorfulClouds.WeatherAlert", `ids: ${identifier}`);
+                        const colorfulClouds = new ColorfulClouds(parameters, Settings.API.ColorfulClouds.Token);
+                        const source = await colorfulClouds.WeatherAlert();
+                        body = WeatherAlerts.Build(source, {
+                            attributionUrl: source?.metadata?.attributionUrl ?? "https://www.caiyunapp.com/h5",
+                            identifier: `${parameters.latitude},${parameters.longitude}`,
+                            language: parameters.language,
+                            countryCode: parameters.country,
+                        });
+                        break;
+                    }
+                    case "QWeatherWeb":
+                    case "QWeather": {
+                        const qWeather = new QWeather(parameters, Settings.API.QWeather.Token, Settings.API.QWeather.Host);
+                        body = WeatherAlerts.Build(await qWeather.WeatherAlert(), {
+                            attributionUrl: "https://www.12379.cn/",
+                            identifier: `${parameters.latitude},${parameters.longitude}`,
+                            language: parameters.language,
+                            countryCode: parameters.country,
+                        });
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    } catch (error) {
+        Console.error("WeatherAlerts", error?.stack ?? error?.message ?? String(error));
+    }
+    Console.info("✅ WeatherAlerts", `alerts: ${body.length}`, "status: 200");
+    return {
+        status: 200,
+        statusCode: 200,
+        headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "max-age=0",
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+    };
 }

@@ -624,7 +624,7 @@ export default class WeatherAlerts {
         const fallback = WeatherAlerts.#TrimWeatherAlertTitle(eventName);
         if (!title) return fallback;
 
-        const chinese = title.match(/^.+?(?:发布|更新)\s*[:：]?\s*(.+)$/);
+        const chinese = title.match(/^.+?(?:发布|更新|变更)\s*[:：]?\s*(.+)$/);
         if (chinese?.[1]) return WeatherAlerts.#TrimWeatherAlertTitle(chinese[1]);
 
         const issued = title.match(/^(.+?)\s+issued\b\s*[:：]?\s*(.+)$/i);
@@ -647,6 +647,7 @@ export default class WeatherAlerts {
     static #TrimWeatherAlertTitle(title) {
         return String(title ?? "")
             .trim()
+            .replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, "")
             .replace(/\s*[。．.]+\s*$/gu, "")
             .replace(/预警信号$/u, "预警")
             .replace(/預警信號$/u, "預警");

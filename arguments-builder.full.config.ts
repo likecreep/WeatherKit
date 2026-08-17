@@ -21,6 +21,10 @@ type Arg = {
 export const output = {
     surge: {
         path: "./dist/iRingo.WeatherKit.sgmodule",
+        transformEgern: {
+            enable: true,
+            path: "./dist/iRingo.WeatherKit.yaml",
+        },
     },
     loon: {
         path: "./dist/iRingo.WeatherKit.lpx",
@@ -45,20 +49,32 @@ export const output = {
     },
 };
 
-// 必须与 database.mjs 中允许配置关闭的可注入数据集保持一致。
-const dataSets: Arg[] = [
+export const dataSets: Arg[] = [
+    {
+        key: "DataSets",
+        defaultValue: ["airQuality", "currentWeather", "forecastDaily", "forecastHourly", "forecastNextHour", "weatherAlerts"],
+        type: "array",
+    },
+];
+
+export const dataSetsFull: Arg[] = [
     {
         key: "DataSets",
         name: "[数据集]",
-        defaultValue: ["airQuality", "currentWeather", "forecastDaily", "forecastHourly", "forecastNextHour"],
+        defaultValue: ["airQuality", "currentWeather", "forecastDaily", "forecastHourly", "forecastNextHour", "locationInfo", "news", "historicalComparisons", "weatherAlerts", "weatherChanges"],
         type: "array",
-        description: "仅控制插件可修改的数据集；取消选中会停止请求该数据集，其他 Apple 数据集始终透传。",
+        description: "选中的数据集会被包含在请求中。",
         options: [
             { key: "airQuality", label: "空气质量" },
             { key: "currentWeather", label: "当前天气" },
             { key: "forecastDaily", label: "每日预报" },
             { key: "forecastHourly", label: "每小时预报" },
             { key: "forecastNextHour", label: "未来一小时降水强度" },
+            { key: "locationInfo", label: "位置信息" },
+            { key: "news", label: "新闻" },
+            { key: "historicalComparisons", label: "历史对比" },
+            { key: "weatherAlerts", label: "天气预警" },
+            { key: "weatherChanges", label: "天气变化" },
         ],
     },
 ];
@@ -85,7 +101,7 @@ const weatherProvider: Arg = {
 };
 
 export const weather = [weatherProvider];
-const weatherFull = [weatherReplace, weatherProvider];
+export const weatherFull = [weatherReplace, weatherProvider];
 
 const weatherAlertsProvider: Arg = {
     key: "WeatherAlerts.Provider",
@@ -117,7 +133,7 @@ const nextHourProvider: Arg = {
 };
 
 export const nextHour = [nextHourProvider];
-const nextHourFull = [nextHourProvider];
+export const nextHourFull = [nextHourProvider];
 
 const airQualityCurrentPollutantsProvider: Arg = {
     key: "AirQuality.Current.Pollutants.Provider",
@@ -214,6 +230,8 @@ const airQualityCurrentIndexForceCNPrimaryPollutants: Arg = {
 
 const airQualityCurrentFull = [airQualityCurrentPollutantsProvider, airQualityCurrentPollutantsUnitsReplace, airQualityCurrentPollutantsUnitsMode, airQualityCurrentIndexReplace, airQualityCurrentIndexProvider, airQualityCurrentIndexForceCNPrimaryPollutants];
 
+export const airQuality = [airQualityCurrentPollutantsProvider];
+
 const airQualityComparisonReplace: Arg = {
     key: "AirQuality.Comparison.ReplaceWhenCurrentChange",
     name: "[空气质量 - 对比昨日] 变化时替换",
@@ -247,7 +265,7 @@ const airQualityComparisonYesterdayIndexProvider: Arg = {
 
 const airQualityComparisonFull = [airQualityComparisonReplace, airQualityComparisonYesterdayPollutantsProvider, airQualityComparisonYesterdayIndexProvider];
 
-const airQualityFull = [...airQualityCurrentFull, ...airQualityComparisonFull];
+export const airQualityFull = [...airQualityCurrentFull, ...airQualityComparisonFull];
 
 const calculateAlgorithm: Arg = {
     key: "AirQuality.Calculate.Algorithm",
@@ -261,6 +279,12 @@ const calculateAlgorithm: Arg = {
         { key: "WAQI_InstantCast_US", label: "美标InstantCast（EPA-454/B-24-002）" },
         { key: "WAQI_InstantCast_CN", label: "国标InstantCast（HJ 633—2012）" },
         { key: "WAQI_InstantCast_CN_25_DRAFT", label: "国标InstantCast（HJ 633 2025年草案）" },
+        { key: "CA_AQHI", label: "加拿大AQHI（10.17269/s41997-019-00237-w）" },
+        { key: "HK_AQHI", label: "香港AQHI" },
+        { key: "AQHI_Multi_CN", label: "AQHI-Multi（中国）" },
+        { key: "AQHI_Multi_CN_HK", label: "AQHI-Multi（中国+香港）" },
+        { key: "CN_DEATH_AQHI", label: "中国（致死风险）AQHI" },
+        { key: "CN_DEATH_HK_AQHI", label: "中国（致死风险）+香港AQHI" },
     ],
     description: "使用内置算法，通过污染物数据本地计算空气指数。InstantCast源自于WAQI，美标版本使用了WAQI的臭氧标准。",
 };
@@ -274,7 +298,7 @@ const calculateAllowOverRange: Arg = {
 };
 
 export const calculate = [calculateAlgorithm];
-const calculateFull = [calculateAlgorithm, calculateAllowOverRange];
+export const calculateFull = [calculateAlgorithm, calculateAllowOverRange];
 
 export const api: Arg[] = [
     {
@@ -346,5 +370,5 @@ export const logLevel: Arg[] = [
 
 export default defineConfig({
     output,
-    args: [...dataSets, ...weatherFull, ...weatherAlerts, ...nextHourFull, ...airQualityFull, ...calculateFull, ...api, ...storage, ...logLevel],
+    args: [...dataSetsFull, ...weatherFull, ...weatherAlerts, ...nextHourFull, ...airQualityFull, ...calculateFull, ...api, ...storage, ...logLevel],
 });
